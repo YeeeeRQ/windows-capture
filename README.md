@@ -1,213 +1,62 @@
-# Windows Capture &emsp; [![Licence]][Licence URL] [![Build Status]][repository] [![Latest Version]][crates.io] [![Sponsors]][Sponsors URL]
+# windows-capture (Fork)
 
-[Licence]: https://img.shields.io/crates/l/windows-capture
-[Licence URL]: https://github.com/NiiightmareXD/windows-capture/blob/main/LICENCE
-[Build Status]: https://img.shields.io/github/actions/workflow/status/NiiightmareXD/windows-capture/rust.yml
-[repository]: https://github.com/NiiightmareXD/windows-capture
-[Latest Version]: https://img.shields.io/crates/v/windows-capture
-[crates.io]: https://crates.io/crates/windows-capture
-[Sponsors]: https://img.shields.io/github/sponsors/NiiightmareXD
-[Sponsors URL]: https://github.com/sponsors/NiiightmareXD
+基于 [NiiightmareXD/windows-capture](https://github.com/NiiightmareXD/windows-capture) v1.5.0 的修改版本。
 
-## 🎉 Windows Capture 2.0.0 is here! 🚀
+## 修改变更
 
-- 🎬 Enhanced video encoder: hardware-accelerated with improved stability and monotonic audio timing
-- 🖥️ New support for the DXGI Desktop Duplication API
+### 主要修改：Graceful Fallback 机制
 
----
+当 Graphics Capture API 某些功能在当前系统上不支持时，不再抛出错误，改为输出警告并继续执行。
 
-**Windows Capture** is a highly efficient Rust and Python library that enables you to capture the screen using the Graphics Capture API effortlessly. This library allows you to easily capture the screen of your Windows-based computer and use it for various purposes, such as creating instructional videos, taking screenshots, or recording your gameplay. With its intuitive interface and robust functionality, Windows Capture is an excellent choice for anyone looking for a reliable, easy-to-use screen-capturing solution.
+**解决的问题**：
+- 错误信息：`"Toggling the capture border is not supported by the Graphics Capture API on this platform"`
+- 同样问题影响：`CursorCaptureSettings`、`DrawBorderSettings`、`SecondaryWindowSettings`、`MinimumUpdateIntervalSettings`、`DirtyRegionSettings`
 
-Note: This README is for the Rust library. The Python library can be found here: https://github.com/NiiightmareXD/windows-capture/tree/main/windows-capture-python
+**受影响的 API**：
+- `is_border_settings_supported()`
+- `is_cursor_settings_supported()`
+- `is_secondary_windows_supported()`
+- `is_minimum_update_interval_supported()`
+- `is_dirty_region_supported()`
 
-# Recall.ai - API for desktop recording
+### 根本原因
 
-If you’re looking for a hosted desktop recording API, consider checking out [Recall.ai](https://www.recall.ai/product/desktop-recording-sdk?utm_source=github&utm_medium=sponsorship&utm_campaign=niiightmarexd-windows-capture), an API that records Zoom, Google Meet, Microsoft Teams, in-person meetings, and more.
+`is_*_settings_supported()` 系列函数通过 WinRT 元数据检测属性是否存在：
 
-## Features
+```rust
+ApiInformation::IsPropertyPresent(
+    &HSTRING::from("Windows.Graphics.Capture.GraphicsCaptureSession"),
+    &HSTRING::from("IsBorderRequired"),
+)?
+```
 
-- Updates frames only when required
-- High performance
-- Easy to use
-- Uses the latest Windows Graphics Capture API
-- Supports the DXGI Desktop Duplication API
-- Enhanced, hardware-accelerated video encoder with stable audio timing
+在某些 Windows 系统上（如 Windows 10 21H2），虽然 Graphics Capture API 本身工作正常，但 WinRT 元数据可能错误地报告 `IsBorderRequired` 属性不存在，导致函数返回 `false`。
 
-## Installation
+**实际测试结果**：检测返回 `false` 时，截图和录屏功能仍然正常工作，只是边框等附加功能不会生效。
 
-Add this dependency to your `Cargo.toml`:
+## 使用方法
 
 ```toml
 [dependencies]
-windows-capture = "2.0.0-alpha.7"
+windows-capture = { git = "https://github.com/YeeeeRQ/windows-capture" }
 ```
 
-Or run this command:
+## 适用场景
 
-```
-cargo add windows-capture
-```
+- Windows 10/11 系统
+- 遇到 "Toggling the capture border is not supported" 或类似错误
+- 需要更稳定的基本屏幕捕获功能
 
-## Usage
+## 与原版差异
 
-```rust
-use std::io::{self, Write};
-use std::time::Instant;
+| 特性 | 原版 (NiiightmareXD) | Fork (YeeeeRQ) |
+|------|------------------------|----------------|
+| 版本 | 2.0.0-alpha.7 / 1.5.0 | 1.5.0 |
+| 不支持的功能 | 返回错误，程序退出 | 输出警告，继续执行 |
+| 截图功能 | 可能报错退出 | 正常 |
+| 录屏功能 | 可能报错退出 | 正常 |
 
-use windows_capture::capture::{Context, GraphicsCaptureApiHandler};
-use windows_capture::encoder::{
-    AudioSettingsBuilder, ContainerSettingsBuilder, VideoEncoder, VideoSettingsBuilder,
-};
-use windows_capture::frame::Frame;
-use windows_capture::graphics_capture_api::InternalCaptureControl;
-use windows_capture::graphics_capture_picker::GraphicsCapturePicker;
-use windows_capture::settings::{
-    ColorFormat, CursorCaptureSettings, DirtyRegionSettings, DrawBorderSettings,
-    MinimumUpdateIntervalSettings, SecondaryWindowSettings, Settings,
-};
+## 原仓库
 
-// Handles capture events.
-struct Capture {
-    // The video encoder that will be used to encode the frames.
-    encoder: Option<VideoEncoder>,
-    // To measure the time the capture has been running
-    start: Instant,
-}
-
-impl GraphicsCaptureApiHandler for Capture {
-    // The type of flags used to get the values from the settings, here they are the width and height.
-    type Flags = (i32, i32);
-
-    // The type of error that can be returned from `CaptureControl` and `start`
-    // functions.
-    type Error = Box<dyn std::error::Error + Send + Sync>;
-
-    // Function that will be called to create a new instance. The flags can be
-    // passed from settings.
-    fn new(ctx: Context<Self::Flags>) -> Result<Self, Self::Error> {
-        // If we didn't want to get the size from the settings, we could use frame.width() and frame.height()
-        // in the on_frame_arrived function, but we would need to create the encoder there.
-        let encoder = VideoEncoder::new(
-            VideoSettingsBuilder::new(ctx.flags.0 as u32, ctx.flags.1 as u32),
-            AudioSettingsBuilder::default().disabled(true),
-            ContainerSettingsBuilder::default(),
-            "video.mp4",
-        )?;
-
-        Ok(Self { encoder: Some(encoder), start: Instant::now() })
-    }
-
-    // Called every time a new frame is available.
-    fn on_frame_arrived(
-        &mut self,
-        frame: &mut Frame,
-        capture_control: InternalCaptureControl,
-    ) -> Result<(), Self::Error> {
-        print!("\rRecording for: {} seconds", self.start.elapsed().as_secs());
-        io::stdout().flush()?;
-
-        // Send the frame to the video encoder
-        self.encoder.as_mut().unwrap().send_frame(frame)?;
-
-        // The frame has other uses too, for example, you can save a single frame
-        // to a file, like this: frame.save_as_image("frame.png", ImageFormat::Png)?;
-        // Or get the raw data like this so you have full control: let data = frame.buffer()?;
-
-        // Stop the capture after 6 seconds
-        if self.start.elapsed().as_secs() >= 6 {
-            // Finish the encoder and save the video.
-            self.encoder.take().unwrap().finish()?;
-
-            capture_control.stop();
-
-            // Because the previous prints did not include a newline.
-            println!();
-        }
-
-        Ok(())
-    }
-
-    // Optional handler called when the capture item (usually a window) is closed.
-    fn on_closed(&mut self) -> Result<(), Self::Error> {
-        println!("Capture session ended");
-
-        Ok(())
-    }
-}
-
-fn main() {
-    // Opens a dialog to pick a window or screen to capture; refer to the docs for other capture items.
-    let item = GraphicsCapturePicker::pick_item().expect("Failed to pick item");
-
-    // If the user canceled the selection, exit.
-    let Some(item) = item else {
-        println!("No item selected");
-        return;
-    };
-
-    // Get the size of the item to pass to the settings.
-    let size = item.size().expect("Failed to get item size");
-
-    let settings = Settings::new(
-        // Item to capture
-        item,
-        // Capture cursor settings
-        CursorCaptureSettings::Default,
-        // Draw border settings
-        DrawBorderSettings::Default,
-        // Secondary window settings, if you want to include secondary windows in the capture
-        SecondaryWindowSettings::Default,
-        // Minimum update interval, if you want to change the frame rate limit (default is 60 FPS or 16.67 ms)
-        MinimumUpdateIntervalSettings::Default,
-        // Dirty region settings
-        DirtyRegionSettings::Default,
-        // The desired color format for the captured frame.
-        ColorFormat::Rgba8,
-        // Additional flags for the capture settings that will be passed to the user-defined `new` function.
-        size,
-    );
-
-    // Starts the capture and takes control of the current thread.
-    // The errors from the handler trait will end up here.
-    Capture::start(settings).expect("Screen capture failed");
-}
-```
-
-## DXGI Desktop Duplication example
-
-```rust
-use windows_capture::dxgi_duplication_api::DxgiDuplicationApi;
-use windows_capture::encoder::ImageFormat;
-use windows_capture::monitor::Monitor;
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Select a monitor (primary in this example)
-    let monitor = Monitor::primary()?;
-
-    // Create a duplication session for this monitor
-    let mut dup = DxgiDuplicationApi::new(monitor)?;
-
-    // Try to grab one frame within ~33ms (about 30 FPS budget)
-    let mut frame = dup.acquire_next_frame(33)?;
-
-    // Map the GPU image into CPU memory and save a PNG
-    // Note: The API could send an empty frame especially
-    // in the first few calls, you can check this by seeing if
-    // frame.frame_info().LastPresentTime is zero.
-    frame.save_as_image("dxgi_screenshot.png", ImageFormat::Png)?;
-
-    Ok(())
-}
-```
-
-## Documentation
-
-Detailed documentation for each API and type is available at https://docs.rs/windows-capture.
-
-## Contributing
-
-Contributions are welcome! If you find a bug or want to add a feature, please open an issue or submit a pull request.
-
-## License
-
-This project is licensed under the [MIT License](LICENCE).
+- Fork 自：https://github.com/NiiightmareXD/windows-capture
+- 本 Fork：https://github.com/YeeeeRQ/windows-capture
