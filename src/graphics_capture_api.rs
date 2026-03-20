@@ -347,27 +347,25 @@ impl GraphicsCaptureApi {
         }
 
         if draw_border_settings != DrawBorderSettings::Default {
-            match Self::is_border_settings_supported() {
-                Ok(true) => match draw_border_settings {
-                    DrawBorderSettings::Default => (),
-                    DrawBorderSettings::WithBorder => {
-                        eprintln!("[windows-capture] Calling SetIsBorderRequired(true)");
-                        if let Err(e) = session.SetIsBorderRequired(true) {
-                            eprintln!("[windows-capture] Failed to set border required: {:?}", e);
-                        }
+            match draw_border_settings {
+                DrawBorderSettings::Default => (),
+                DrawBorderSettings::WithBorder => {
+                    eprintln!(
+                        "[windows-capture] Attempting SetIsBorderRequired(true) regardless of is_border_settings_supported result"
+                    );
+                    match session.SetIsBorderRequired(true) {
+                        Ok(_) => eprintln!("[windows-capture] SetIsBorderRequired(true) succeeded!"),
+                        Err(e) => eprintln!("[windows-capture] SetIsBorderRequired(true) failed: {:?}", e),
                     }
-                    DrawBorderSettings::WithoutBorder => {
-                        eprintln!("[windows-capture] Calling SetIsBorderRequired(false)");
-                        if let Err(e) = session.SetIsBorderRequired(false) {
-                            eprintln!("[windows-capture] Failed to set border required: {:?}", e);
-                        }
-                    }
-                },
-                Ok(false) => {
-                    eprintln!("[windows-capture] Border settings not supported (2nd check), ignoring");
                 }
-                Err(e) => {
-                    eprintln!("[windows-capture] Border settings check failed (2nd): {:?}, ignoring", e);
+                DrawBorderSettings::WithoutBorder => {
+                    eprintln!(
+                        "[windows-capture] Attempting SetIsBorderRequired(false) regardless of is_border_settings_supported result"
+                    );
+                    match session.SetIsBorderRequired(false) {
+                        Ok(_) => eprintln!("[windows-capture] SetIsBorderRequired(false) succeeded!"),
+                        Err(e) => eprintln!("[windows-capture] SetIsBorderRequired(false) failed: {:?}", e),
+                    }
                 }
             }
         }
