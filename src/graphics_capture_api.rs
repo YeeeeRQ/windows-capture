@@ -148,21 +148,8 @@ impl GraphicsCaptureApi {
             eprintln!("[windows-capture] Cursor settings not supported, using system default");
         }
 
-        if draw_border_settings != DrawBorderSettings::Default {
-            match Self::is_border_settings_supported() {
-                Ok(supported) => {
-                    if !supported {
-                        eprintln!(
-                            "[windows-capture] Border settings not supported (is_border_settings_supported returned false), using system default"
-                        );
-                    } else {
-                        eprintln!("[windows-capture] Border settings supported, will apply");
-                    }
-                }
-                Err(e) => {
-                    eprintln!("[windows-capture] Border settings check failed: {:?}, using system default", e);
-                }
-            }
+        if draw_border_settings != DrawBorderSettings::Default && !Self::is_border_settings_supported()? {
+            eprintln!("[windows-capture] Border settings not supported, using system default");
         }
 
         if secondary_window_settings != SecondaryWindowSettings::Default && !Self::is_secondary_windows_supported()? {
@@ -327,7 +314,7 @@ impl GraphicsCaptureApi {
         }))?;
 
         if cursor_capture_settings != CursorCaptureSettings::Default {
-            if Self::is_cursor_settings_supported()? {
+            if Self::is_cursor_settings_supported().unwrap_or(false) {
                 match cursor_capture_settings {
                     CursorCaptureSettings::Default => (),
                     CursorCaptureSettings::WithCursor => {
@@ -350,28 +337,20 @@ impl GraphicsCaptureApi {
             match draw_border_settings {
                 DrawBorderSettings::Default => (),
                 DrawBorderSettings::WithBorder => {
-                    eprintln!(
-                        "[windows-capture] Attempting SetIsBorderRequired(true) regardless of is_border_settings_supported result"
-                    );
-                    match session.SetIsBorderRequired(true) {
-                        Ok(_) => eprintln!("[windows-capture] SetIsBorderRequired(true) succeeded!"),
-                        Err(e) => eprintln!("[windows-capture] SetIsBorderRequired(true) failed: {:?}", e),
+                    if let Err(e) = session.SetIsBorderRequired(true) {
+                        eprintln!("[windows-capture] Failed to set border required (true): {:?}", e);
                     }
                 }
                 DrawBorderSettings::WithoutBorder => {
-                    eprintln!(
-                        "[windows-capture] Attempting SetIsBorderRequired(false) regardless of is_border_settings_supported result"
-                    );
-                    match session.SetIsBorderRequired(false) {
-                        Ok(_) => eprintln!("[windows-capture] SetIsBorderRequired(false) succeeded!"),
-                        Err(e) => eprintln!("[windows-capture] SetIsBorderRequired(false) failed: {:?}", e),
+                    if let Err(e) = session.SetIsBorderRequired(false) {
+                        eprintln!("[windows-capture] Failed to set border required (false): {:?}", e);
                     }
                 }
             }
         }
 
         if secondary_window_settings != SecondaryWindowSettings::Default {
-            if Self::is_secondary_windows_supported()? {
+            if Self::is_secondary_windows_supported().unwrap_or(false) {
                 match secondary_window_settings {
                     SecondaryWindowSettings::Default => (),
                     SecondaryWindowSettings::Include => {
@@ -391,7 +370,7 @@ impl GraphicsCaptureApi {
         }
 
         if minimum_update_interval_settings != MinimumUpdateIntervalSettings::Default {
-            if Self::is_minimum_update_interval_supported()? {
+            if Self::is_minimum_update_interval_supported().unwrap_or(false) {
                 match minimum_update_interval_settings {
                     MinimumUpdateIntervalSettings::Default => (),
                     MinimumUpdateIntervalSettings::Custom(duration) => {
@@ -406,7 +385,7 @@ impl GraphicsCaptureApi {
         }
 
         if dirty_region_settings != DirtyRegionSettings::Default {
-            if Self::is_dirty_region_supported()? {
+            if Self::is_dirty_region_supported().unwrap_or(false) {
                 match dirty_region_settings {
                     DirtyRegionSettings::Default => (),
                     DirtyRegionSettings::ReportOnly => {
