@@ -5,18 +5,16 @@
 //! API. This library allows you to easily capture the screen of your
 //! Windows-based computer and use it for various purposes, such as creating
 //! instructional videos, taking screenshots, or recording your gameplay. With
-//! its intuitive interface and robust functionality, Windows Capture is an
+//! its intuitive interface and robust functionality, Windows-Capture is an
 //! excellent choice for anyone looking for a reliable and easy-to-use screen
 //! capturing solution.
 //!
 //! ## Features
 //!
-//! - Updates frames only when required
-//! - High performance
-//! - Easy to use
-//! - Uses the latest Windows Graphics Capture API
-//! - Supports the DXGI Desktop Duplication API
-//! - Enhanced, hardware-accelerated video encoder with stable audio timing
+//! - Only updates the frame when required.
+//! - High performance.
+//! - Easy to use.
+//! - Latest screen capturing API.
 //!
 //! ## Installation
 //!
@@ -24,9 +22,9 @@
 //!
 //! ```toml
 //! [dependencies]
-//! windows-capture = "2.0.0-alpha.7"
+//! windows-capture = "1.5.0"
 //! ```
-//! Or run this command:
+//! or run this command
 //!
 //! ```text
 //! cargo add windows-capture
@@ -44,7 +42,7 @@
 //! };
 //! use windows_capture::frame::Frame;
 //! use windows_capture::graphics_capture_api::InternalCaptureControl;
-//! use windows_capture::graphics_capture_picker::GraphicsCapturePicker;
+//! use windows_capture::monitor::Monitor;
 //! use windows_capture::settings::{
 //!     ColorFormat, CursorCaptureSettings, DirtyRegionSettings, DrawBorderSettings,
 //!     MinimumUpdateIntervalSettings, SecondaryWindowSettings, Settings,
@@ -59,8 +57,8 @@
 //! }
 //!
 //! impl GraphicsCaptureApiHandler for Capture {
-//!     // The type of flags used to get the values from the settings, here they are the width and height.
-//!     type Flags = (i32, i32);
+//!     // The type of flags used to get the values from the settings.
+//!     type Flags = String;
 //!
 //!     // The type of error that can be returned from `CaptureControl` and `start`
 //!     // functions.
@@ -69,10 +67,10 @@
 //!     // Function that will be called to create a new instance. The flags can be
 //!     // passed from settings.
 //!     fn new(ctx: Context<Self::Flags>) -> Result<Self, Self::Error> {
-//!         // If we didn't want to get the size from the settings, we could use frame.width() and frame.height()
-//!         // in the on_frame_arrived function, but we would need to create the encoder there.
+//!         println!("Created with Flags: {}", ctx.flags);
+//!
 //!         let encoder = VideoEncoder::new(
-//!             VideoSettingsBuilder::new(ctx.flags.0 as u32, ctx.flags.1 as u32),
+//!             VideoSettingsBuilder::new(1920, 1080),
 //!             AudioSettingsBuilder::default().disabled(true),
 //!             ContainerSettingsBuilder::default(),
 //!             "video.mp4",
@@ -93,9 +91,10 @@
 //!         // Send the frame to the video encoder
 //!         self.encoder.as_mut().unwrap().send_frame(frame)?;
 //!
-//!         // The frame has other uses too, for example, you can save a single frame
+//!         // Note: The frame has other uses too, for example, you can save a single frame
 //!         // to a file, like this: frame.save_as_image("frame.png", ImageFormat::Png)?;
-//!         // Or get the raw data like this so you have full control: let data = frame.buffer()?;
+//!         // Or get the raw data like this so you have full
+//!         // control: let data = frame.buffer()?;
 //!
 //!         // Stop the capture after 6 seconds
 //!         if self.start.elapsed().as_secs() >= 6 {
@@ -119,21 +118,12 @@
 //!     }
 //! }
 //!
-//! // Opens a dialog to pick a window or screen to capture; refer to the docs for other capture items.
-//! let item = GraphicsCapturePicker::pick_item().expect("Failed to pick item");
-//!
-//! // If the user canceled the selection, exit.
-//! let Some(item) = item else {
-//!     println!("No item selected");
-//!     return;
-//! };
-//!
-//! // Get the size of the item to pass to the settings.
-//! let size = item.size().expect("Failed to get item size");
+//! // Gets the primary monitor, refer to the docs for other capture items.
+//! let primary_monitor = Monitor::primary().expect("There is no primary monitor");
 //!
 //! let settings = Settings::new(
 //!     // Item to capture
-//!     item,
+//!     primary_monitor,
 //!     // Capture cursor settings
 //!     CursorCaptureSettings::Default,
 //!     // Draw border settings
@@ -142,12 +132,12 @@
 //!     SecondaryWindowSettings::Default,
 //!     // Minimum update interval, if you want to change the frame rate limit (default is 60 FPS or 16.67 ms)
 //!     MinimumUpdateIntervalSettings::Default,
-//!     // Dirty region settings
+//!     // Dirty region settings,
 //!     DirtyRegionSettings::Default,
 //!     // The desired color format for the captured frame.
 //!     ColorFormat::Rgba8,
 //!     // Additional flags for the capture settings that will be passed to the user-defined `new` function.
-//!     size,
+//!     "Yea this works".to_string(),
 //! );
 //!
 //! // Starts the capture and takes control of the current thread.
@@ -156,38 +146,24 @@
 //! ```
 #![warn(clippy::nursery)]
 #![warn(clippy::cargo)]
-#![warn(clippy::multiple_crate_versions)]
-#![warn(missing_docs)]
+#![warn(clippy::multiple_crate_versions)] // Should update as soon as possible
 
 /// Exported for the trait bounds
-pub use windows::Graphics::Capture::GraphicsCaptureItem;
+pub use windows::Graphics::Capture::GraphicsCaptureItem as WindowsCaptureGraphicsCaptureItem;
 
-/// Contains safe wrapper for WinRT initialization.
-pub(crate) mod winrt;
-
-/// Contains the main capture functionality, including the
-/// [`crate::capture::GraphicsCaptureApiHandler`] trait and related types.
+/// Contains the main capture functionality, including the `WindowsCaptureHandler` trait and related types.
 pub mod capture;
 /// Internal module for Direct3D 11 related functionality.
-pub mod d3d11;
-/// Contains types and functions related to the DXGI Desktop Duplication API.
-pub mod dxgi_duplication_api;
-/// Contains the encoder functionality for encoding captured frames, including
-/// [`crate::encoder::VideoEncoder`].
+mod d3d11;
+/// Contains the encoder functionality for encoding captured frames.
 pub mod encoder;
-/// Contains the [`crate::frame::Frame`] struct and related types for representing captured frames.
+/// Contains the `Frame` struct and related types for representing captured frames.
 pub mod frame;
 /// Contains the types and functions related to the Graphics Capture API.
 pub mod graphics_capture_api;
-/// Contains the functionality for displaying a picker to select a window or screen to capture:
-/// [`crate::graphics_capture_picker::GraphicsCapturePicker`].
-pub mod graphics_capture_picker;
-/// Contains functionality for working with monitors and screen information:
-/// [`crate::monitor::Monitor`].
+/// Contains the functionality for working with monitors and screen information.
 pub mod monitor;
-/// Contains the [`crate::settings::Settings`] struct and related types for configuring capture
-/// settings.
+/// Contains the `Settings` struct and related types for configuring the capture settings.
 pub mod settings;
-/// Contains functionality for working with windows and capturing specific windows:
-/// [`crate::window::Window`].
+/// Contains the functionality for working with windows and capturing specific windows.
 pub mod window;

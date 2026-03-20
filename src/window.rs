@@ -1,58 +1,33 @@
-//! Utilities for querying and working with top-level windows.
-//!
-//! Provides [`Window`] for finding and inspecting windows (title, process),
-//! testing capture suitability, enumerating capturable windows, and converting
-//! a window into a graphics capture item.
-//!
-//! Common tasks include:
-//! - Getting the foreground window via [`Window::foreground`].
-//! - Finding by exact title via [`Window::from_name`].
-//! - Finding by substring via [`Window::from_contains_name`].
-//! - Enumerating capturable windows via [`Window::enumerate`].
-//! - Getting the owning process name via [`Window::process_name`].
-//! - Computing the title bar height via [`Window::title_bar_height`].
-//!
-//! To acquire a [`crate::GraphicsCaptureItem`] for a window, use
-//! [`crate::settings::TryIntoCaptureItemWithDetails`] for [`Window`].
 use std::ptr;
 
 use windows::Graphics::Capture::GraphicsCaptureItem;
-use windows::Win32::Foundation::{GetLastError, HWND, LPARAM, RECT, TRUE};
+use windows::Win32::Foundation::{HWND, LPARAM, RECT, TRUE};
 use windows::Win32::Graphics::Dwm::{DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute};
 use windows::Win32::Graphics::Gdi::{MONITOR_DEFAULTTONULL, MonitorFromWindow};
 use windows::Win32::System::ProcessStatus::GetModuleBaseNameW;
-use windows::Win32::System::Threading::{GetCurrentProcessId, OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ};
+use windows::Win32::System::Threading::{
+    GetCurrentProcessId, OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ,
+};
 use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemInterop;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumChildWindows, FindWindowW, GWL_EXSTYLE, GWL_STYLE, GetClientRect, GetDesktopWindow, GetForegroundWindow,
-    GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
-    WS_CHILD, WS_EX_TOOLWINDOW,
+    EnumChildWindows, FindWindowW, GWL_EXSTYLE, GWL_STYLE, GetClientRect, GetDesktopWindow,
+    GetForegroundWindow, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
+    GetWindowThreadProcessId, IsWindowVisible, WS_CHILD, WS_EX_TOOLWINDOW,
 };
 use windows::core::{BOOL, HSTRING, Owned};
 
 use crate::monitor::Monitor;
-use crate::settings::GraphicsCaptureItemType;
+use crate::settings::{CaptureItemTypes, TryIntoCaptureItemWithType};
 
 #[derive(thiserror::Error, Eq, PartialEq, Clone, Debug)]
-/// Errors that can occur when querying or manipulating top-level windows via [`Window`].
 pub enum Error {
-    /// There is no foreground window at the time of the call.
-    ///
-    /// Returned by [`Window::foreground`].
     #[error("No active window found.")]
     NoActiveWindow,
-    /// No window matched the provided title or substring.
-    ///
-    /// Returned by [`Window::from_name`] and [`Window::from_contains_name`].
     #[error("Failed to find a window with the name: {0}")]
     NotFound(String),
-    /// Converting a UTF-16 Windows string to `String` failed.
     #[error("Failed to convert a Windows string from UTF-16")]
     FailedToConvertWindowsString,
-    /// A Windows API call returned an error.
-    ///
-    /// Wraps [`windows::core::Error`].
     #[error("A Windows API call failed: {0}")]
     WindowsError(#[from] windows::core::Error),
 }
@@ -82,7 +57,7 @@ impl Window {
     ///
     /// # Errors
     ///
-    /// - [`Error::NoActiveWindow`] when there is no foreground window
+    /// Returns `Error::NoActiveWindow` if there is no foreground window.
     #[inline]
     pub fn foreground() -> Result<Self, Error> {
         let window = unsafe { GetForegroundWindow() };
@@ -96,10 +71,13 @@ impl Window {
 
     /// Finds a window by its exact title.
     ///
+    /// # Arguments
+    ///
+    /// * `title` - The title of the window to find.
+    ///
     /// # Errors
     ///
-    /// - [`Error::WindowsError`] when the underlying `FindWindowW` call fails
-    /// - [`Error::NotFound`] when no window with the specified title is found
+    /// Returns `Error::NotFound` if no window with the specified title is found.
     #[inline]
     pub fn from_name(title: &str) -> Result<Self, Error> {
         let hstring_title = HSTRING::from(title);
@@ -114,11 +92,13 @@ impl Window {
 
     /// Finds a window whose title contains the given substring.
     ///
+    /// # Arguments
+    ///
+    /// * `title` - The substring to search for in window titles.
+    ///
     /// # Errors
     ///
-    /// - [`Error::WindowsError`] when enumerating windows fails
-    /// - [`Error::FailedToConvertWindowsString`] when converting a window title from UTF-16 fails
-    /// - [`Error::NotFound`] when no window title contains the specified substring
+    /// Returns `Error::NotFound` if no window title contains the specified substring.
     #[inline]
     pub fn from_contains_name(title: &str) -> Result<Self, Error> {
         let windows = Self::enumerate()?;
@@ -138,22 +118,23 @@ impl Window {
     ///
     /// # Errors
     ///
-    /// - [`Error::FailedToConvertWindowsString`] when converting the window title from UTF-16 fails
+    /// Returns an `Error` if the window title cannot be retrieved.
     #[inline]
     pub fn title(&self) -> Result<String, Error> {
         let len = unsafe { GetWindowTextLengthW(self.window) };
 
-        if len == 0 {
-            return Ok(String::new());
+        let mut name = vec![0u16; usize::try_from(len).unwrap() + 1];
+        if len >= 1 {
+            let copied = unsafe { GetWindowTextW(self.window, &mut name) };
+            if copied == 0 {
+                return Ok(String::new());
+            }
         }
 
-        let mut buf = vec![0u16; usize::try_from(len).unwrap() + 1];
-        let copied = unsafe { GetWindowTextW(self.window, &mut buf) };
-        if copied == 0 {
-            return Ok(String::new());
-        }
-
-        let name = String::from_utf16(&buf[..copied as usize]).map_err(|_| Error::FailedToConvertWindowsString)?;
+        let name = String::from_utf16(
+            &name.as_slice().iter().take_while(|ch| **ch != 0x0000).copied().collect::<Vec<u16>>(),
+        )
+        .map_err(|_| Error::FailedToConvertWindowsString)?;
 
         Ok(name)
     }
@@ -162,14 +143,14 @@ impl Window {
     ///
     /// # Errors
     ///
-    /// - [`Error::WindowsError`] when `GetWindowThreadProcessId` reports an error
+    /// Returns an `Error` if the process ID cannot be retrieved.
     #[inline]
     pub fn process_id(&self) -> Result<u32, Error> {
         let mut id = 0;
         unsafe { GetWindowThreadProcessId(self.window, Some(&mut id)) };
 
         if id == 0 {
-            return Err(Error::WindowsError(unsafe { GetLastError().into() }));
+            return Err(windows::core::Error::from_win32().into());
         }
 
         Ok(id)
@@ -181,25 +162,26 @@ impl Window {
     ///
     /// # Errors
     ///
-    /// - [`Error::WindowsError`] when opening the process or querying its base module name fails
-    /// - [`Error::FailedToConvertWindowsString`] when converting the process name from UTF-16 fails
+    /// Returns an `Error` if the process name cannot be retrieved.
     #[inline]
     pub fn process_name(&self) -> Result<String, Error> {
         let id = self.process_id()?;
 
-        let process = unsafe { OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, id) }?;
+        let process =
+            unsafe { OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, id) }?;
         let process = unsafe { Owned::new(process) };
 
         let mut name = vec![0u16; 260];
         let size = unsafe { GetModuleBaseNameW(*process, None, &mut name) };
 
         if size == 0 {
-            return Err(Error::WindowsError(unsafe { GetLastError().into() }));
+            return Err(windows::core::Error::from_win32().into());
         }
 
-        let name =
-            String::from_utf16(&name.as_slice().iter().take_while(|ch| **ch != 0x0000).copied().collect::<Vec<u16>>())
-                .map_err(|_| Error::FailedToConvertWindowsString)?;
+        let name = String::from_utf16(
+            &name.as_slice().iter().take_while(|ch| **ch != 0x0000).copied().collect::<Vec<u16>>(),
+        )
+        .map_err(|_| Error::FailedToConvertWindowsString)?;
 
         Ok(name)
     }
@@ -207,8 +189,8 @@ impl Window {
     /// Returns the monitor that has the largest area of intersection with the window.
     ///
     /// Returns `None` if the window does not intersect with any monitor.
-    #[inline]
     #[must_use]
+    #[inline]
     pub fn monitor(&self) -> Option<Monitor> {
         let window = self.window;
 
@@ -221,19 +203,23 @@ impl Window {
     ///
     /// # Errors
     ///
-    /// - [`Error::WindowsError`] when `GetWindowRect` fails
+    /// Returns `Error::WindowsError` if the window rectangle cannot be retrieved.
     #[inline]
     pub fn rect(&self) -> Result<RECT, Error> {
         let mut rect = RECT::default();
         let result = unsafe { GetWindowRect(self.window, &mut rect) };
-        if result.is_ok() { Ok(rect) } else { Err(Error::WindowsError(unsafe { GetLastError().into() })) }
+        if result.is_ok() {
+            Ok(rect)
+        } else {
+            Err(Error::WindowsError(windows::core::Error::from_win32()))
+        }
     }
 
     /// Calculates the height of the window's title bar in pixels.
     ///
     /// # Errors
     ///
-    /// - [`Error::WindowsError`] when `DwmGetWindowAttribute` or `GetClientRect` fails
+    /// Returns `Error` if the title bar height cannot be determined.
     #[inline]
     pub fn title_bar_height(&self) -> Result<u32, Error> {
         let mut window_rect = RECT::default();
@@ -258,14 +244,14 @@ impl Window {
         Ok(actual_title_height as u32)
     }
 
-    /// Checks whether the window is a valid target for capture.
+    /// Checks if the window is a valid target for capture.
     ///
     /// # Returns
     ///
     /// Returns `true` if the window is visible, not a tool window, and not a child window.
     /// Returns `false` otherwise.
-    #[inline]
     #[must_use]
+    #[inline]
     pub fn is_valid(&self) -> bool {
         if !unsafe { IsWindowVisible(self.window).as_bool() } {
             return false;
@@ -280,15 +266,8 @@ impl Window {
         let mut rect = RECT::default();
         let result = unsafe { GetClientRect(self.window, &mut rect) };
         if result.is_ok() {
-            #[cfg(target_pointer_width = "64")]
             let styles = unsafe { GetWindowLongPtrW(self.window, GWL_STYLE) };
-            #[cfg(target_pointer_width = "64")]
             let ex_styles = unsafe { GetWindowLongPtrW(self.window, GWL_EXSTYLE) };
-
-            #[cfg(target_pointer_width = "32")]
-            let styles = unsafe { GetWindowLongPtrW(self.window, GWL_STYLE) as isize };
-            #[cfg(target_pointer_width = "32")]
-            let ex_styles = unsafe { GetWindowLongPtrW(self.window, GWL_EXSTYLE) as isize };
 
             if (ex_styles & isize::try_from(WS_EX_TOOLWINDOW.0).unwrap()) != 0 {
                 return false;
@@ -307,7 +286,7 @@ impl Window {
     ///
     /// # Errors
     ///
-    /// - [`Error::WindowsError`] when `EnumChildWindows` fails
+    /// Returns an `Error` if the window enumeration fails.
     #[inline]
     pub fn enumerate() -> Result<Vec<Self>, Error> {
         let mut windows: Vec<Self> = Vec::new();
@@ -324,36 +303,20 @@ impl Window {
         Ok(windows)
     }
 
-    /// Returns the width of the window in pixels.
+    /// Creates a `Window` instance from a raw `HWND` handle.
     ///
-    /// # Errors
+    /// # Arguments
     ///
-    /// - [`Error::WindowsError`] when retrieving the window rectangle fails
-    pub fn width(&self) -> Result<i32, Error> {
-        let rect = self.rect()?;
-        Ok(rect.right - rect.left)
-    }
-
-    /// Returns the height of the window in pixels.
-    ///
-    /// # Errors
-    ///
-    /// - [`Error::WindowsError`] when retrieving the window rectangle fails
-    pub fn height(&self) -> Result<i32, Error> {
-        let rect = self.rect()?;
-        Ok(rect.bottom - rect.top)
-    }
-
-    /// Constructs a `Window` instance from a raw `HWND` handle.
-    #[inline]
+    /// * `hwnd` - The raw `HWND` handle.
     #[must_use]
+    #[inline]
     pub const fn from_raw_hwnd(hwnd: *mut std::ffi::c_void) -> Self {
         Self { window: HWND(hwnd) }
     }
 
     /// Returns the raw `HWND` handle of the window.
-    #[inline]
     #[must_use]
+    #[inline]
     pub const fn as_raw_hwnd(&self) -> *mut std::ffi::c_void {
         self.window.0
     }
@@ -371,16 +334,17 @@ impl Window {
     }
 }
 
-impl TryInto<GraphicsCaptureItemType> for Window {
-    type Error = windows::core::Error;
-
+// Implements `TryIntoCaptureItemWithType` for `Window` to convert it to a `GraphicsCaptureItem`.
+impl TryIntoCaptureItemWithType for Window {
     #[inline]
-    fn try_into(self) -> Result<GraphicsCaptureItemType, Self::Error> {
+    fn try_into_capture_item(
+        self,
+    ) -> Result<(GraphicsCaptureItem, CaptureItemTypes), windows::core::Error> {
         let window = HWND(self.as_raw_hwnd());
 
         let interop = windows::core::factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()?;
         let item = unsafe { interop.CreateForWindow(window)? };
 
-        Ok(GraphicsCaptureItemType::Window((item, self)))
+        Ok((item, CaptureItemTypes::Window(self)))
     }
 }

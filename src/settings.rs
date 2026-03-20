@@ -2,25 +2,23 @@ use std::time::Duration;
 
 use windows::Graphics::Capture::GraphicsCaptureItem;
 
-use crate::graphics_capture_picker::HwndGuard;
 use crate::monitor::Monitor;
 use crate::window::Window;
 
-/// An enumeration of item types that can be captured.
-///
-/// Wraps the WinRT [`GraphicsCaptureItem`] together with additional details about the source:
-/// - [`Monitor`] for display monitors,
-/// - [`Window`] for top-level windows,
-/// - [`crate::graphics_capture_picker::HwndGuard`] for unknown HWND-based sources.
-pub enum GraphicsCaptureItemType {
-    /// A display monitor. Contains the [`GraphicsCaptureItem`] and its [`Monitor`] details.
-    Monitor((GraphicsCaptureItem, Monitor)),
-    /// An application window. Contains the [`GraphicsCaptureItem`] and its [`Window`] details.
-    Window((GraphicsCaptureItem, Window)),
-    /// An unknown capture item type (typically created from an HWND). Contains the
-    /// [`GraphicsCaptureItem`] and the associated
-    /// [`crate::graphics_capture_picker::HwndGuard`].
-    Unknown((GraphicsCaptureItem, HwndGuard)),
+/// An enumeration of the types of items that can be captured.
+pub enum CaptureItemTypes {
+    /// A display monitor.
+    Monitor(Monitor),
+    /// An application window.
+    Window(Window),
+}
+
+/// A trait for types that can be converted into a `GraphicsCaptureItem`.
+pub trait TryIntoCaptureItemWithType {
+    /// Attempts to convert the object into a `GraphicsCaptureItem` and its corresponding `CaptureItemTypes` variant.
+    fn try_into_capture_item(
+        self,
+    ) -> Result<(GraphicsCaptureItem, CaptureItemTypes), windows::core::Error>;
 }
 
 /// Specifies the pixel format for the captured frame.
@@ -35,7 +33,7 @@ pub enum ColorFormat {
 }
 
 impl Default for ColorFormat {
-    /// The default color format is [`ColorFormat::Rgba8`].
+    /// The default color format is `Rgba8`.
     #[inline]
     fn default() -> Self {
         Self::Rgba8
@@ -84,8 +82,7 @@ pub enum MinimumUpdateIntervalSettings {
     Custom(Duration),
 }
 
-/// Defines how the system should handle dirty regions, which are areas of the screen that have
-/// changed.
+/// Defines how the system should handle dirty regions, which are areas of the screen that have changed.
 #[derive(Eq, PartialEq, Clone, Copy, Debug)]
 pub enum DirtyRegionSettings {
     /// Use the system's default behavior for dirty regions.
@@ -98,7 +95,7 @@ pub enum DirtyRegionSettings {
 
 /// Represents the settings for a screen capture session.
 #[derive(Eq, PartialEq, Clone, Debug)]
-pub struct Settings<Flags, T: TryInto<GraphicsCaptureItemType>> {
+pub struct Settings<Flags, T: TryIntoCaptureItemWithType> {
     /// The item to be captured (e.g., a `Window` or `Monitor`).
     pub(crate) item: T,
     /// Specifies whether the cursor should be captured.
@@ -117,10 +114,21 @@ pub struct Settings<Flags, T: TryInto<GraphicsCaptureItemType>> {
     pub(crate) flags: Flags,
 }
 
-impl<Flags, T: TryInto<GraphicsCaptureItemType>> Settings<Flags, T> {
-    /// Constructs a new [`Settings`] configuration.
-    #[inline]
+impl<Flags, T: TryIntoCaptureItemWithType> Settings<Flags, T> {
+    /// Creates a new `Settings` configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `item` - The item to be captured (a `Window` or `Monitor`).
+    /// * `cursor_capture_settings` - The desired cursor capture behavior.
+    /// * `draw_border_settings` - The desired border drawing behavior.
+    /// * `secondary_window_settings` - The desired behavior for capturing secondary windows.
+    /// * `minimum_update_interval_settings` - The desired minimum time between frame updates.
+    /// * `dirty_region_settings` - The desired behavior for handling dirty regions.
+    /// * `color_format` - The desired pixel format for the captured frames.
+    /// * `flags` - Custom flags to be passed to the capture implementation's `new` function.
     #[must_use]
+    #[inline]
     #[allow(clippy::too_many_arguments)]
     pub const fn new(
         item: T,
@@ -145,36 +153,56 @@ impl<Flags, T: TryInto<GraphicsCaptureItemType>> Settings<Flags, T> {
     }
 
     /// Returns a reference to the capture item.
-    #[inline]
+    ///
+    /// # Returns
+    ///
+    /// A reference to the item to be captured.
     #[must_use]
+    #[inline]
     pub const fn item(&self) -> &T {
         &self.item
     }
 
     /// Returns the cursor capture settings.
-    #[inline]
+    ///
+    /// # Returns
+    ///
+    /// The current `CursorCaptureSettings`.
     #[must_use]
+    #[inline]
     pub const fn cursor_capture(&self) -> CursorCaptureSettings {
         self.cursor_capture_settings
     }
 
     /// Returns the draw border settings.
-    #[inline]
+    ///
+    /// # Returns
+    ///
+    /// The current `DrawBorderSettings`.
     #[must_use]
+    #[inline]
     pub const fn draw_border(&self) -> DrawBorderSettings {
         self.draw_border_settings
     }
 
     /// Returns the color format.
-    #[inline]
+    ///
+    /// # Returns
+    ///
+    /// The current `ColorFormat`.
     #[must_use]
+    #[inline]
     pub const fn color_format(&self) -> ColorFormat {
         self.color_format
     }
 
     /// Returns a reference to the flags.
-    #[inline]
+    ///
+    /// # Returns
+    ///
+    /// A reference to the user-defined flags.
     #[must_use]
+    #[inline]
     pub const fn flags(&self) -> &Flags {
         &self.flags
     }
